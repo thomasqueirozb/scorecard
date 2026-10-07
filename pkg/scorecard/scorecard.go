@@ -153,6 +153,19 @@ func runScorecard(ctx context.Context,
 		"localPath":                localPath,
 	}
 
+	// Read the repository's config file before the checks run, because some checks use it.
+	r, path := findConfigFile(repoClient)
+	if r != nil {
+		defer r.Close()
+		logger := sclog.NewLogger(sclog.DefaultLevel)
+		logger.Info(fmt.Sprintf("using maintainer configuration: %s", path))
+		c, err := config.Parse(r)
+		if err != nil {
+			logger.Info(fmt.Sprintf("couldn't parse maintainer configuration: %v", err))
+		}
+		ret.Config = c
+	}
+
 	request := &checker.CheckRequest{
 		Ctx:                   ctx,
 		RepoClient:            repoClient,
@@ -162,6 +175,7 @@ func runScorecard(ctx context.Context,
 		ProjectClient:         projectClient,
 		Repo:                  repo,
 		RawResults:            &ret.RawResults,
+		Config:                ret.Config,
 	}
 
 	// If the user runs probes
@@ -175,20 +189,6 @@ func runScorecard(ctx context.Context,
 
 	// If the user runs checks
 	go runEnabledChecks(ctx, repo, request, checksToRun, resultsCh)
-
-	// get the repository's config file to read annotations
-	r, path := findConfigFile(repoClient)
-	logger := sclog.NewLogger(sclog.DefaultLevel)
-
-	if r != nil {
-		defer r.Close()
-		logger.Info(fmt.Sprintf("using maintainer annotations: %s", path))
-		c, err := config.Parse(r)
-		if err != nil {
-			logger.Info(fmt.Sprintf("couldn't parse maintainer annotations: %v", err))
-		}
-		ret.Config = c
-	}
 
 	for result := range resultsCh {
 		ret.Checks = append(ret.Checks, result)

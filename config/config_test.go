@@ -116,6 +116,67 @@ func Test_Parse_Checks(t *testing.T) {
 			configPath: "testdata/invalid_reason.yml",
 			wantErr:    true,
 		},
+		{
+			name:       "Token permissions allowed writes",
+			configPath: "testdata/token_permissions.yml",
+			want: Config{
+				TokenPermissions: TokenPermissions{
+					AllowedWrites: []AllowedWrite{
+						{
+							Permission: "packages",
+							Uses:       "actions/delete-package-versions",
+							Reason:     "Deletes old container images",
+						},
+						{
+							Permission: "contents",
+							Uses:       "./.github/workflows/publish.yml",
+							Reason:     "Creates GitHub releases",
+						},
+						{
+							Permission: "contents",
+							Workflow:   ".github/workflows/publish.yml",
+							Job:        "publish-github",
+							Reason:     "Creates GitHub releases with make",
+						},
+					},
+				},
+			},
+		},
+		{
+			name:       "Token permissions permission that the check ignores",
+			configPath: "testdata/token_permissions_invalid_permission.yml",
+			wantErr:    true,
+		},
+		{
+			name:       "Token permissions uses with a ref",
+			configPath: "testdata/token_permissions_ref.yml",
+			wantErr:    true,
+		},
+		{
+			name:       "Token permissions without uses or workflow and job",
+			configPath: "testdata/token_permissions_no_uses.yml",
+			wantErr:    true,
+		},
+		{
+			name:       "Token permissions without reason",
+			configPath: "testdata/token_permissions_no_reason.yml",
+			wantErr:    true,
+		},
+		{
+			name:       "Token permissions with uses and a job",
+			configPath: "testdata/token_permissions_uses_and_job.yml",
+			wantErr:    true,
+		},
+		{
+			name:       "Token permissions workflow without job",
+			configPath: "testdata/token_permissions_workflow_no_job.yml",
+			wantErr:    true,
+		},
+		{
+			name:       "Token permissions workflow outside .github/workflows/",
+			configPath: "testdata/token_permissions_workflow_path.yml",
+			wantErr:    true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

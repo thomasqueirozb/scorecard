@@ -1,0 +1,4 @@
+token-permissions:
+  allowed-writes:
+    - permission: packages
+      reason: Uses is required

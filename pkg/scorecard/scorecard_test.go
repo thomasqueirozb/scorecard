@@ -14,6 +14,7 @@
 package scorecard
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -301,6 +302,7 @@ func TestRun_WithProbes(t *testing.T) {
 				}, nil
 			})
 			mockRepoClient.EXPECT().ListFiles(gomock.Any()).Return(tt.files, nil).AnyTimes()
+			mockRepoClient.EXPECT().GetFileReader(gomock.Any()).Return(nil, errors.New("file not found")).AnyTimes()
 			progLanguages := []clients.Language{
 				{
 					Name:     clients.Go,

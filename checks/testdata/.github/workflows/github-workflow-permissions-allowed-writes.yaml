@@ -1,0 +1,62 @@
+# Copyright 2026 OpenSSF Scorecard Authors
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+name: allowed writes
+on: [push]
+permissions:
+  contents: read
+
+jobs:
+  delete-packages:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/delete-package-versions@e5bc658cc4c965c472efe991f8beea3981499c55 # v5.0.0
+
+  call-local-workflow:
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/github-workflow-permissions-called-workflow.yaml
+
+  call-missing-local-workflow:
+    permissions:
+      contents: write
+    uses: ./.github/workflows/missing.yaml
+
+  call-remote-workflow:
+    permissions:
+      contents: write
+    uses: octo-org/workflows/.github/workflows/publish.yml@v1
+
+  other-packages:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+  wrong-permission:
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: write
+    steps:
+      - uses: actions/delete-package-versions@v5
+
+  similar-action:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - uses: actions/delete-package-versions-fork@v5

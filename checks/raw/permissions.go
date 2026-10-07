@@ -16,11 +16,15 @@ package raw
 
 import (
 	"fmt"
+	"io"
+	"maps"
 	"strings"
 
 	"github.com/ossf/scorecard/v5/checker"
 	"github.com/ossf/scorecard/v5/checks/fileparser"
 	"github.com/ossf/scorecard/v5/checks/raw/github"
+	"github.com/ossf/scorecard/v5/clients"
+	"github.com/ossf/scorecard/v5/config"
 	sce "github.com/ossf/scorecard/v5/errors"
 	"github.com/ossf/scorecard/v5/finding"
 	"github.com/ossf/scorecard/v5/internal/ghworkflow"
@@ -45,13 +49,21 @@ var permissionsOfInterest = []permission{
 }
 
 type permissionCbData struct {
-	results checker.TokenPermissionsData
+	repoClient    clients.RepoClient
+	allowedWrites []config.AllowedWrite
+	// calledWrites caches the write permissions that each local reusable workflow declares.
+	calledWrites map[string]map[permission]bool
+	results      checker.TokenPermissionsData
 }
 
 // TokenPermissions runs Token-Permissions check.
 func TokenPermissions(c *checker.CheckRequest) (checker.TokenPermissionsData, error) {
 	// data is shared across all GitHub workflows.
-	var data permissionCbData
+	data := permissionCbData{
+		repoClient:    c.RepoClient,
+		allowedWrites: c.Config.TokenPermissions.AllowedWrites,
+		calledWrites:  make(map[string]map[permission]bool),
+	}
 
 	err := fileparser.OnMatchingFileContentDo(c.RepoClient, fileparser.PathMatcher{
 		Pattern:       ".github/workflows/*",
@@ -314,13 +326,177 @@ func validatejobLevelPermissions(workflow *ghworkflow.Workflow, path string,
 
 			continue
 		}
+		jobIgnoredPermissions := acceptedJobWrites(ignoredPermissions, job, path, pdata)
 		err := validatePermissions(job.Permissions, checker.PermissionLocationJob,
-			path, pdata, ignoredPermissions)
+			path, pdata, jobIgnoredPermissions)
 		if err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// acceptedJobWrites returns ignoredPermissions plus the write permissions that the job
+// declares and that are accepted for this job. A write is accepted when:
+//   - the maintainer configuration allows it for an action or reusable workflow that the job uses,
+//     or for this job of this workflow file, or
+//   - the job calls a local reusable workflow that declares the same write. GitHub requires the caller
+//     to grant it, and the called workflow gets its own warning where the write is used.
+//
+// It returns ignoredPermissions unchanged when no write is accepted for the job.
+func acceptedJobWrites(ignoredPermissions map[permission]bool, job *ghworkflow.Job, path string,
+	pdata *permissionCbData,
+) map[permission]bool {
+	var jobIgnoredPermissions map[permission]bool
+	accept := func(p permission, uses *ghworkflow.String, msg string) {
+		if jobIgnoredPermissions == nil {
+			jobIgnoredPermissions = maps.Clone(ignoredPermissions)
+			if jobIgnoredPermissions == nil {
+				jobIgnoredPermissions = make(map[permission]bool)
+			}
+		}
+		jobIgnoredPermissions[p] = true
+
+		// Only log for debugging, like the other accepted writes.
+		permLoc := checker.PermissionLocationJob
+		pdata.results.TokenPermissions = append(pdata.results.TokenPermissions,
+			checker.TokenPermission{
+				File: &checker.File{
+					Path:    path,
+					Type:    finding.FileTypeSource,
+					Offset:  fileparser.GetLineNumber(uses.Pos),
+					Snippet: uses.Value,
+				},
+				LocationType: &permLoc,
+				Type:         checker.PermissionLevelUnknown,
+				Msg:          github.StringPointer(msg),
+			})
+	}
+
+	for _, aw := range pdata.allowedWrites {
+		if !jobDeclaresWrite(job, aw.Permission) {
+			continue
+		}
+		var target *ghworkflow.String
+		if aw.Uses != "" {
+			target = jobUses(job, aw.Uses)
+		} else if path == aw.Workflow && job.ID != nil && strings.EqualFold(job.ID.Value, aw.Job) {
+			target = job.ID
+		}
+		if target != nil {
+			accept(permission(aw.Permission), target, fmt.Sprintf(
+				"'%s: write' allowed by maintainer configuration for '%s': %s", aw.Permission, aw.Target(), aw.Reason))
+		}
+	}
+
+	if calledWrites := localCalledWorkflowWrites(job, pdata); calledWrites != nil {
+		for _, p := range permissionsOfInterest {
+			if calledWrites[p] && jobDeclaresWrite(job, string(p)) {
+				accept(p, job.WorkflowCall.Uses, fmt.Sprintf(
+					"'%s: write' is declared by the called workflow '%s'", p, job.WorkflowCall.Uses.Value))
+			}
+		}
+	}
+
+	if jobIgnoredPermissions == nil {
+		return ignoredPermissions
+	}
+	return jobIgnoredPermissions
+}
+
+// localCalledWorkflowWrites returns the write permissions that the local reusable workflow
+// called by the job declares, or nil if the job does not call a local reusable workflow.
+// Remote reusable workflows are in other repositories and are not read.
+func localCalledWorkflowWrites(job *ghworkflow.Job, pdata *permissionCbData) map[permission]bool {
+	if job.WorkflowCall == nil || job.WorkflowCall.Uses == nil ||
+		!strings.HasPrefix(job.WorkflowCall.Uses.Value, "./") {
+		return nil
+	}
+	calledPath := strings.TrimPrefix(job.WorkflowCall.Uses.Value, "./")
+	if writes, ok := pdata.calledWrites[calledPath]; ok {
+		return writes
+	}
+	writes := readWorkflowWrites(pdata.repoClient, calledPath)
+	pdata.calledWrites[calledPath] = writes
+	return writes
+}
+
+// readWorkflowWrites returns the write permissions that the workflow declares at the top level
+// or in any job. If the workflow cannot be read or parsed, it returns an empty set, so the
+// caller's writes are reported as usual.
+func readWorkflowWrites(rc clients.RepoClient, path string) map[permission]bool {
+	writes := make(map[permission]bool)
+	if rc == nil {
+		return writes
+	}
+	r, err := rc.GetFileReader(path)
+	if err != nil {
+		return writes
+	}
+	defer r.Close()
+	content, err := io.ReadAll(r)
+	if err != nil {
+		return writes
+	}
+	workflow, _ := ghworkflow.Parse(content)
+	if workflow == nil {
+		return writes
+	}
+	addWrites(writes, workflow.Permissions)
+	for _, job := range workflow.Jobs {
+		addWrites(writes, job.Permissions)
+	}
+	return writes
+}
+
+func addWrites(writes map[permission]bool, perms *ghworkflow.Permissions) {
+	if perms == nil {
+		return
+	}
+	if perms.All != nil && strings.EqualFold(perms.All.Value, "write-all") {
+		for _, p := range permissionsOfInterest {
+			writes[p] = true
+		}
+		return
+	}
+	for key, scope := range perms.Scopes {
+		if scope != nil && scope.Value != nil && strings.EqualFold(scope.Value.Value, "write") {
+			writes[permission(strings.ToLower(key))] = true
+		}
+	}
+}
+
+// jobDeclaresWrite returns true if the job's permissions set the permission to write.
+func jobDeclaresWrite(job *ghworkflow.Job, name string) bool {
+	if job.Permissions == nil {
+		return false
+	}
+	for key, scope := range job.Permissions.Scopes {
+		if strings.EqualFold(key, name) && scope != nil && scope.Value != nil &&
+			strings.EqualFold(scope.Value.Value, "write") {
+			return true
+		}
+	}
+	return false
+}
+
+// jobUses returns the 'uses' value of the job or of one of its steps that
+// refers to the action or reusable workflow, or nil if the job does not use it.
+// A remote reference matches with any ref; a local reusable workflow matches exactly.
+func jobUses(job *ghworkflow.Job, ref string) *ghworkflow.String {
+	if job.WorkflowCall != nil && usesMatches(job.WorkflowCall.Uses, ref) {
+		return job.WorkflowCall.Uses
+	}
+	for _, step := range job.Steps {
+		if uses := fileparser.GetUses(step); usesMatches(uses, ref) {
+			return uses
+		}
+	}
+	return nil
+}
+
+func usesMatches(uses *ghworkflow.String, ref string) bool {
+	return uses != nil && (uses.Value == ref || strings.HasPrefix(uses.Value, ref+"@"))
 }
 
 func isPermissionOfInterest(name permission, ignoredPermissions map[permission]bool) bool {

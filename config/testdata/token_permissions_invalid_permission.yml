@@ -1,0 +1,5 @@
+token-permissions:
+  allowed-writes:
+    - permission: pull-requests
+      uses: actions/labeler
+      reason: Not a permission that the check warns about

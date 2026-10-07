@@ -1,0 +1,7 @@
+token-permissions:
+  allowed-writes:
+    - permission: contents
+      uses: actions/checkout
+      workflow: .github/workflows/publish.yml
+      job: publish-github
+      reason: Uses and job are exclusive

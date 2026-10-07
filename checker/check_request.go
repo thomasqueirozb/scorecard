@@ -18,6 +18,7 @@ import (
 	"context"
 
 	"github.com/ossf/scorecard/v5/clients"
+	"github.com/ossf/scorecard/v5/config"
 	"github.com/ossf/scorecard/v5/internal/packageclient"
 )
 
@@ -34,6 +35,8 @@ type CheckRequest struct {
 	// UPGRADEv6: return raw results instead of scores.
 	RawResults    *RawResults
 	RequiredTypes []RequestType
+	// Config is the maintainer configuration read from the repository's scorecard.yml.
+	Config config.Config
 }
 
 // RequestType identifies special requirements/attributes that need to be supported by checks.

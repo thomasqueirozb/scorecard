@@ -60,3 +60,43 @@ The annotations are predefined as shown in the table below:
 ## Viewing Maintainer Annotations
 
 To see the maintainers annotations for each check on Scorecard results, use the `--show-annotations` option.
+
+# Token-Permissions Allowed Writes
+
+The Token-Permissions check warns about job-level write permissions, unless the workflow uses a
+packaging or release action that Scorecard recognizes. Maintainers can accept a job-level write
+permission in the same `scorecard.yml` file, for jobs that use a specific action or reusable workflow,
+or for a specific job:
+
+```yml
+token-permissions:
+  allowed-writes:
+    - permission: packages
+      uses: actions/delete-package-versions
+      reason: Deletes old container images from GHCR
+    - permission: contents
+      uses: octo-org/workflows/.github/workflows/release.yml
+      reason: The remote reusable workflow creates GitHub releases
+    - permission: contents
+      workflow: .github/workflows/publish.yml
+      job: publish-github
+      reason: Creates the GitHub release with a shell script
+```
+
+- `permission` is one of `actions`, `checks`, `contents`, `deployments`, `packages`, `security-events` or `statuses`.
+- Set either `uses`, or `workflow` and `job`:
+  - `uses` is an action, a remote reusable workflow or a local reusable workflow, without a ref.
+    A remote reference matches any ref. A local reusable workflow must match exactly.
+    The rule applies to every job that uses it in a step, or that calls the reusable workflow.
+  - `workflow` is the path of the workflow file in `.github/workflows/`, and `job` is the job ID.
+    Use it when the job needs the permission for a `run` step, which Scorecard cannot identify.
+- `reason` is required and is shown in the debug details of the check.
+
+A rule applies only to jobs that declare the permission as `write`. Other jobs in the same workflow
+file still get the warning. Top-level write permissions are never accepted.
+
+A job that calls a local reusable workflow (`uses: ./.github/workflows/...`) does not need a rule.
+GitHub requires the caller to grant the write permissions that the called jobs declare, so the check
+accepts a caller's write when the called workflow declares the same write. The check reports the write
+in the called workflow instead, where it is used. To accept it there, add a rule for the action that
+the called job uses.

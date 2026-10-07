@@ -1,0 +1,5 @@
+token-permissions:
+  allowed-writes:
+    - permission: packages
+      uses: actions/delete-package-versions@v5
+      reason: Refs are not allowed

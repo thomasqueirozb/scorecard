@@ -1,0 +1,5 @@
+token-permissions:
+  allowed-writes:
+    - permission: contents
+      workflow: .github/workflows/publish.yml
+      reason: Job is required with workflow

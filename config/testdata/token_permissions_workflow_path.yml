@@ -1,0 +1,6 @@
+token-permissions:
+  allowed-writes:
+    - permission: contents
+      workflow: ./.github/workflows/publish.yml
+      job: publish-github
+      reason: Workflow must be a path in .github/workflows/

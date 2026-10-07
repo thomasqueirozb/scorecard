@@ -33,7 +33,8 @@ var (
 
 // Config contains configurations defined by maintainers.
 type Config struct {
-	Annotations []Annotation `yaml:"annotations"`
+	Annotations      []Annotation     `yaml:"annotations"`
+	TokenPermissions TokenPermissions `yaml:"token-permissions"`
 }
 
 // parseFile takes the scorecard.yml file content and returns a `Config`.
@@ -68,7 +69,7 @@ func validate(c Config) error {
 			}
 		}
 	}
-	return nil
+	return validateTokenPermissions(c.TokenPermissions)
 }
 
 // Parse reads the configuration file from the repo, stored in scorecard.yml, and returns a `Config`.

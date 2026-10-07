@@ -1,0 +1,4 @@
+token-permissions:
+  allowed-writes:
+    - permission: packages
+      uses: actions/delete-package-versions

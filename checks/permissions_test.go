@@ -17,6 +17,7 @@ package checks
 import (
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/ossf/scorecard/v5/checker"
 	"github.com/ossf/scorecard/v5/clients"
 	mockrepo "github.com/ossf/scorecard/v5/clients/mockclients"
+	"github.com/ossf/scorecard/v5/config"
 	scut "github.com/ossf/scorecard/v5/utests"
 )
 
@@ -454,6 +456,127 @@ func TestGithubTokenPermissions(t *testing.T) {
 			res := TokenPermissions(&c)
 
 			scut.ValidateTestReturn(t, tt.name, &tt.expected, &res, &dl)
+		})
+	}
+}
+
+func TestGithubTokenPermissionsAllowedWrites(t *testing.T) {
+	t.Parallel()
+	allowedWrites := []config.AllowedWrite{
+		{Permission: "packages", Uses: "actions/delete-package-versions", Reason: "deletes old images"},
+		{Permission: "contents", Uses: "octo-org/workflows/.github/workflows/publish.yml", Reason: "creates releases"},
+	}
+	tests := []struct {
+		name          string
+		filename      string
+		allowedWrites []config.AllowedWrite
+		wantScore     int
+		wantWarnLines []uint
+	}{
+		{
+			// The caller's 'contents: write' (line 29) is declared by the called local
+			// workflow, so it is accepted without configuration. Its 'packages: write'
+			// (line 30) is not declared by the called workflow and warns. A missing
+			// local workflow (line 35) and a remote one (line 40) are not accepted.
+			name:          "without configuration, only writes declared by called local workflows are accepted",
+			filename:      "./testdata/.github/workflows/github-workflow-permissions-allowed-writes.yaml",
+			wantScore:     checker.MaxResultScore,
+			wantWarnLines: []uint{23, 30, 35, 40, 46, 53, 60},
+		},
+		{
+			// Only the jobs that use a configured action or reusable workflow, and only
+			// the configured permissions, are accepted. Other jobs in the file still warn.
+			name:          "configured writes are accepted per job and permission",
+			filename:      "./testdata/.github/workflows/github-workflow-permissions-allowed-writes.yaml",
+			allowedWrites: allowedWrites,
+			wantScore:     checker.MaxResultScore,
+			wantWarnLines: []uint{30, 35, 46, 53, 60},
+		},
+		{
+			// Job rules apply to one job of one workflow file, for one permission.
+			name:     "job rules are accepted for the job, workflow file and permission",
+			filename: "./testdata/.github/workflows/github-workflow-permissions-allowed-writes.yaml",
+			allowedWrites: []config.AllowedWrite{
+				{
+					Permission: "contents",
+					Workflow:   ".github/workflows/github-workflow-permissions-allowed-writes.yaml",
+					Job:        "call-missing-local-workflow",
+					Reason:     "accepted: line 35",
+				},
+				{
+					Permission: "packages",
+					Workflow:   ".github/workflows/github-workflow-permissions-allowed-writes.yaml",
+					Job:        "other-packages",
+					Reason:     "accepted: line 46",
+				},
+				{
+					Permission: "packages",
+					Workflow:   ".github/workflows/other-workflow.yaml",
+					Job:        "similar-action",
+					Reason:     "other workflow file: line 60 still warns",
+				},
+				{
+					Permission: "statuses",
+					Workflow:   ".github/workflows/github-workflow-permissions-allowed-writes.yaml",
+					Job:        "similar-action",
+					Reason:     "other permission: line 60 still warns",
+				},
+			},
+			wantScore:     checker.MaxResultScore,
+			wantWarnLines: []uint{23, 30, 40, 53, 60},
+		},
+		{
+			name:          "top-level writes are never accepted",
+			filename:      "./testdata/.github/workflows/github-workflow-permissions-allowed-writes-top-level.yaml",
+			allowedWrites: allowedWrites,
+			wantScore:     checker.MinResultScore,
+			wantWarnLines: []uint{17},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			ctrl := gomock.NewController(t)
+			mockRepo := mockrepo.NewMockRepoClient(ctrl)
+			mockRepo.EXPECT().URI().Return("github.com/ossf/scorecard").AnyTimes()
+			mockRepo.EXPECT().GetDefaultBranchName().Return("main", nil).AnyTimes()
+			mockRepo.EXPECT().ListFiles(gomock.Any()).Return(
+				[]string{strings.TrimPrefix(tt.filename, "./testdata/")}, nil).AnyTimes()
+			mockRepo.EXPECT().GetFileReader(gomock.Any()).DoAndReturn(func(fn string) (io.ReadCloser, error) {
+				return os.Open("./testdata/" + fn)
+			}).AnyTimes()
+			dl := scut.TestDetailLogger{}
+			c := checker.CheckRequest{
+				RepoClient: mockRepo,
+				Dlogger:    &dl,
+				Config: config.Config{
+					TokenPermissions: config.TokenPermissions{AllowedWrites: tt.allowedWrites},
+				},
+			}
+
+			res := TokenPermissions(&c)
+			if res.Error != nil {
+				t.Fatalf("unexpected error: %v", res.Error)
+			}
+			if res.Score != tt.wantScore {
+				t.Errorf("score: got %d, want %d", res.Score, tt.wantScore)
+			}
+			var gotWarnLines []uint
+			for _, d := range dl.Flush() {
+				if d.Type != checker.DetailWarn {
+					continue
+				}
+				f := d.Msg.Finding
+				if f == nil || f.Location == nil || f.Location.LineStart == nil {
+					t.Fatalf("warning without a line: %+v", d.Msg)
+				}
+				gotWarnLines = append(gotWarnLines, *f.Location.LineStart)
+			}
+			slices.Sort(gotWarnLines)
+			if !slices.Equal(gotWarnLines, tt.wantWarnLines) {
+				t.Errorf("warning lines: got %v, want %v", gotWarnLines, tt.wantWarnLines)
+			}
 		})
 	}
 }

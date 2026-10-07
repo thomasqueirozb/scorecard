@@ -1,0 +1,12 @@
+token-permissions:
+  allowed-writes:
+    - permission: packages
+      uses: actions/delete-package-versions
+      reason: Deletes old container images
+    - permission: contents
+      uses: ./.github/workflows/publish.yml
+      reason: Creates GitHub releases
+    - permission: contents
+      workflow: .github/workflows/publish.yml
+      job: publish-github
+      reason: Creates GitHub releases with make
